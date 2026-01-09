@@ -3,6 +3,8 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Globalization;
+using System.IO;
+using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls.Primitives;
@@ -469,12 +471,16 @@ namespace Rapid_Reporter.Forms
                     break;
                 case Session.SessionStartingStage.Environment:
                     NoteType.Text = "Environment:";
-                    NoteContent.Text = "";  // Clear previous value
+                    // Set default environment from previous session
+                    string defaultEnvironment = GetPreviousSessionValue("Environment");
+                    NoteContent.Text = defaultEnvironment;
                     Logger.Record("\t[StateMove]: Session Stage moving -> Environment", "SMWidget", "info");
                     break;
                 case Session.SessionStartingStage.Versions:
                     NoteType.Text = "Versions:";
-                    NoteContent.Text = "";  // Clear previous value
+                    // Set default versions from previous session
+                    string defaultVersions = GetPreviousSessionValue("Versions");
+                    NoteContent.Text = defaultVersions;
                     Logger.Record("\t[StateMove]: Session Stage moving -> Versions", "SMWidget", "info");
                     break;
                 case Session.SessionStartingStage.Notes:
@@ -825,6 +831,76 @@ namespace Rapid_Reporter.Forms
             var effect = new BevelBitmapEffect { BevelWidth = 0, EdgeProfile = EdgeProfile.BulgedUp };
             ScreenShot.BitmapEffect = effect;
             RTFNoteBtn.BitmapEffect = effect;
+        }
+
+        // Get a field value from the most recent session's CSV file
+        private string GetPreviousSessionValue(string fieldName)
+        {
+            Logger.Record($"[GetPreviousSessionValue]: Looking for previous {fieldName}", "SMWidget", "info");
+            try
+            {
+                var currentDir = System.IO.Directory.GetCurrentDirectory();
+                var directories = System.IO.Directory.GetDirectories(currentDir);
+                
+                string latestCsvFile = null;
+                DateTime latestDate = DateTime.MinValue;
+
+                // Find the most recent session directory
+                foreach (var dir in directories)
+                {
+                    var dirName = System.IO.Path.GetFileName(dir);
+                    // Expected format: "yyyyMMdd_HHmmss - ScenarioName"
+                    if (dirName.Contains(" - "))
+                    {
+                        var parts = dirName.Split(new[] { " - " }, 2, StringSplitOptions.None);
+                        if (parts.Length == 2)
+                        {
+                            // Try to parse the timestamp
+                            if (DateTime.TryParseExact(parts[0], "yyyyMMdd_HHmmss", 
+                                CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime dirDate))
+                            {
+                                if (dirDate > latestDate)
+                                {
+                                    latestDate = dirDate;
+                                    // Look for CSV file in this directory
+                                    var csvFiles = System.IO.Directory.GetFiles(dir, "*.csv");
+                                    if (csvFiles.Length > 0)
+                                    {
+                                        latestCsvFile = csvFiles[0];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(latestCsvFile))
+                {
+                    Logger.Record($"[GetPreviousSessionValue]: No previous CSV file found for {fieldName}", "SMWidget", "info");
+                    return "";
+                }
+
+                // Read the CSV file and find the field value
+                foreach (var line in System.IO.File.ReadAllLines(latestCsvFile, Encoding.UTF8))
+                {
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    var columns = line.Split(',');
+                    if (columns.Length >= 3 && columns[1] == fieldName)
+                    {
+                        var value = columns[2].Replace("\"", "").Trim();
+                        Logger.Record($"[GetPreviousSessionValue]: Found {fieldName}: {value}", "SMWidget", "info");
+                        return value;
+                    }
+                }
+
+                Logger.Record($"[GetPreviousSessionValue]: {fieldName} not found in CSV", "SMWidget", "info");
+                return "";
+            }
+            catch (Exception ex)
+            {
+                Logger.Record($"[GetPreviousSessionValue]: Error: {ex.Message}", "SMWidget", "error");
+                return "";
+            }
         }
 
         // Find the most recent scenario and increment its last number
