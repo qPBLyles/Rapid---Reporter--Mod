@@ -36,8 +36,15 @@ namespace Rapid_Reporter
                 var jpgFiles = System.IO.Directory.GetFiles(WorkingDir, "*.jpg");
                 filesToZip.AddRange(pngFiles);
                 filesToZip.AddRange(jpgFiles);
-                // Prepare ZIP file path with timestamp
-                string zipFile = System.IO.Path.Combine(WorkingDir, StartingTime.ToString("yyyyMMdd_HHmmss") + ".zip");
+                // Add text note files (TXT files in WorkingDir)
+                var txtFiles = System.IO.Directory.GetFiles(WorkingDir, "*.txt");
+                filesToZip.AddRange(txtFiles);
+                // Prepare ZIP file path to match the session folder name and include scenario name
+                string baseFolderName = string.Format("{0} - {1}", StartingTime.ToString("yyyyMMdd_HHmmss"), ScenarioId);
+                string folderName = (new string(Path.GetInvalidFileNameChars()) + new string(Path.GetInvalidPathChars())).Aggregate(
+                    baseFolderName,
+                    (current, c) => current.Replace(c.ToString(CultureInfo.InvariantCulture), ""));
+                string zipFile = System.IO.Path.Combine(Directory.GetCurrentDirectory(), folderName + ".zip");
                 // Build command line for 7-Zip
                 string args = "a \"" + zipFile + "\" " + string.Join(" ", filesToZip.ConvertAll(f => "\"" + f + "\""));
                 var process = new System.Diagnostics.Process();
@@ -68,11 +75,6 @@ namespace Rapid_Reporter
             
             // Folder name matches .html file naming: [timestamp] - [ScenarioId]
             string baseFolderName = string.Format("{0} - {1}", StartingTime.ToString("yyyyMMdd_HHmmss"), ScenarioId);
-            // Append 'Bug' if ScenarioId contains 'Bug/Issue' (case-insensitive)
-            if (!string.IsNullOrEmpty(ScenarioId) && ScenarioId.IndexOf("Bug/Issue", StringComparison.OrdinalIgnoreCase) >= 0)
-            {
-                baseFolderName += " Bug";
-            }
             string folderName = (new string(Path.GetInvalidFileNameChars()) + new string(Path.GetInvalidPathChars())).Aggregate(
                 baseFolderName,
                 (current, c) => current.Replace(c.ToString(CultureInfo.InvariantCulture), ""));
@@ -84,7 +86,7 @@ namespace Rapid_Reporter
             CreateWorkingDir(WorkingDir);
             SaveToSessionNotes(ColumnHeaders + "\n"); // Headers of the notes table
                                                       //UpdateNotes("Reporter Tool Version", System.Windows.Forms.Application.ProductVersion);
-            UpdateNotes("Session Reporter", Tester);
+            UpdateNotes("Tester", Tester);
             UpdateNotes("Scenario ID", ScenarioId);
             UpdateNotes("Session Charter", Charter);
             UpdateNotes("Environment", Environment);
@@ -100,12 +102,27 @@ namespace Rapid_Reporter
 
         // Session data:
         public string ScenarioId = "";     // Session objective. Configured in runtime.
-        public string Tester = "";      // Tester's name. Configured in runtime.
+        private string _tester = null;      // Backing field for Tester
+        public string Tester      // Tester's name. Configured in runtime. Lazy-loaded from Windows user info.
+        {
+            get
+            {
+                if (_tester == null)
+                {
+                    _tester = GetWindowsUserFullName();
+                }
+                return _tester;
+            }
+            set
+            {
+                _tester = value;
+            }
+        }
         public string Charter = "";      // Configured in runtime.
         public string Environment = "";      // Configured in runtime.
         public string Versions = "";      // Configured in runtime.
                                           // The types of comments. This can be overriden from command line, so every person can use his own terminology or language
-        public string[] NoteTypes = { "Prerequisite", "Test", "Success", "Bug/Issue", "Note", "Follow Up", "Summary" };
+        public string[] NoteTypes = { "Setup", "Test", "Success", "Bug/Issue", "Note", "Opportunity", "Summary" };
 
         // Session files:
         public string WorkingDir;  // Directory to write the session to
@@ -132,6 +149,41 @@ namespace Rapid_Reporter
             // Set a temporary WorkingDir to prevent null reference exceptions
             // Real folder creation will happen in StartSession() when ScenarioId is available
             WorkingDir = Directory.GetCurrentDirectory() + @"\";
+            
+            // Default Tester name will be lazy-loaded when first accessed
+            // This avoids slow WMI queries during application startup
+        }
+        
+        private static string GetWindowsUserFullName()
+        {
+            try
+            {
+                // Try to get the display name from Active Directory
+                using (var searcher = new System.Management.ManagementObjectSearcher(
+                    string.Format("SELECT FullName FROM Win32_UserAccount WHERE Name = '{0}' AND Domain = '{1}'",
+                    System.Environment.UserName,
+                    System.Environment.UserDomainName)))
+                {
+                    foreach (var user in searcher.Get())
+                    {
+                        var fullName = user["FullName"]?.ToString();
+                        if (!string.IsNullOrWhiteSpace(fullName))
+                        {
+                            Logger.Record($"[GetWindowsUserFullName]: Retrieved full name: {fullName}", "Session", "info");
+                            return fullName;
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.Record($"[GetWindowsUserFullName]: Failed to retrieve full name: {ex.Message}", "Session", "warning");
+            }
+            
+            // Fallback to username if full name is not available
+            var userName = System.Environment.UserName;
+            Logger.Record($"[GetWindowsUserFullName]: Using username as fallback: {userName}", "Session", "info");
+            return userName;
         }
         private void CreateWorkingDir(string path)
         {
@@ -220,17 +272,16 @@ namespace Rapid_Reporter
         internal void UpdateNotes(string type, string note, string screenshot = "", string rtfNote = "")
         {
 
-            // Add "Bug" to folder name if this is a bug note
+            // Add "Bug" icon to folder if this is a bug note
             if (type == "Bug/Issue")
             {
-                AddBugToFolderName();
                 
                 // Change icon ONLY for Bug/Issue folders
                 try
                 {
                     string desktopIniPath = Path.Combine(WorkingDir, "desktop.ini");
                     File.WriteAllText(desktopIniPath,
-                        "[.ShellClassInfo]\r\nIconResource=%SystemRoot%\\System32\\SHELL32.dll,78\r\n"); // Warning icon
+                        "[.ShellClassInfo]\r\nIconResource=%SystemRoot%\\System32\\SHELL32.dll,234\r\n"); // Warning icon
                     File.SetAttributes(desktopIniPath, FileAttributes.Hidden | FileAttributes.System);
                     File.SetAttributes(WorkingDir, File.GetAttributes(WorkingDir) | FileAttributes.System);
                 }
@@ -246,29 +297,6 @@ namespace Rapid_Reporter
             Logger.Record("[UpdateNotes ss]: Note added to session log (" + screenshot + ", " + rtfNote + ")", "Session", "info");
         }
 
-        // Appends ' Bug' to the folder name, preserving ScenarioId and timestamp, if not already present
-        private void AddBugToFolderName()
-        {
-            string trimmed = WorkingDir.TrimEnd('\\');
-            string parentDir = Path.GetDirectoryName(trimmed);
-            string folderName = Path.GetFileName(trimmed);
-            // Only append ' Bug' if not already present
-            if (!folderName.EndsWith("Bug", StringComparison.OrdinalIgnoreCase))
-            {
-                string newFolderName = folderName + " Bug";
-                string newWorkingDir = Path.Combine(parentDir, newFolderName) + "\\";
-                try
-                {
-                    Directory.Move(WorkingDir, newWorkingDir);
-                    WorkingDir = newWorkingDir;
-                    _sessionFileFull = WorkingDir + _sessionFile;
-                }
-                catch (Exception ex)
-                {
-                    Logger.Record("[AddBugToFolderName]: Could not rename folder (" + ex.Message + ")", "Session", "error");
-                }
-            }
-        }
         // Save all notes on file, after every single note
         private void SaveToSessionNotes(string note)
         {
@@ -376,7 +404,7 @@ namespace Rapid_Reporter
                             }
                         }
 
-                        if (thisLine[1] == "Type" || thisLine[1] == "Session Reporter" ||
+                        if (thisLine[1] == "Type" || thisLine[1] == "Tester" ||
                             (thisLine[1] == "Scenario ID" || thisLine[1] == "Session Charter") ||
                             (thisLine[1] == "Environment" || thisLine[1] == "Versions" || thisLine[1] == "Summary"))
                         {
@@ -422,7 +450,7 @@ namespace Rapid_Reporter
                         var note = thisLine[2].Replace("\"", "");
                         switch (thisLine[1])
                         {
-                            case @"Session Reporter":
+                            case @"Tester":
                                 Tester = note;
                                 StartingTime = DateTime.Parse(thisLine[0]);
                                 break;

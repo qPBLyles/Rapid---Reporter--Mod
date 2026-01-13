@@ -3,6 +3,8 @@ using System.Diagnostics;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.Globalization;
+using System.IO;
+using System.Text;
 using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls.Primitives;
@@ -414,7 +416,12 @@ namespace Rapid_Reporter.Forms
                                     break;
                             }
                             /*3*/
-                            ClearNote();
+                            // Only clear note when in Notes stage
+                            // Setup stages (Tester, ScenarioId, etc.) may have default values that shouldn't be cleared
+                            if (_currentStage == Session.SessionStartingStage.Notes)
+                            {
+                                ClearNote();
+                            }
                         }
                         break;
                     // Esc key clears the note field
@@ -433,28 +440,47 @@ namespace Rapid_Reporter.Forms
             switch (_currentStage)
             {
                 case Session.SessionStartingStage.Tester:
-                    NoteType.Text = "Reporter:";
+                    NoteType.Text = "Tester:";
                     prevType.Text = "";
                     nextType.Text = "";
                     _prevNoteType = 1;
                     _nextNoteType = _currentSession.NoteTypes.Length - 1;
                     NoteType.FontSize = 23;
+                    // Set default tester name from session
+                    NoteContent.Text = _currentSession.Tester;
                     Logger.Record("\t[StateMove]: Session Stage moving -> Tester", "SMWidget", "info");
                     break;
                 case Session.SessionStartingStage.Charter:
                     NoteType.Text = "Charter:";
+                    NoteContent.Text = "";  // Clear previous value
                     Logger.Record("\t[StateMove]: Session Stage moving -> Charter", "SMWidget", "info");
                     break;
                 case Session.SessionStartingStage.ScenarioId:
                     NoteType.Text = "Scenario ID:";
+                    // Set default scenario name based on previous session
+                    string defaultScenario = GetIncrementedScenarioName();
+                    if (!string.IsNullOrWhiteSpace(defaultScenario))
+                    {
+                        NoteContent.Text = defaultScenario;
+                    }
+                    else
+                    {
+                        NoteContent.Text = "";  // Clear if no default found
+                    }
                     Logger.Record("\t[StateMove]: Session Stage moving -> ScenarioId", "SMWidget", "info");
                     break;
                 case Session.SessionStartingStage.Environment:
                     NoteType.Text = "Environment:";
+                    // Set default environment from previous session
+                    string defaultEnvironment = GetPreviousSessionValue("Environment");
+                    NoteContent.Text = defaultEnvironment;
                     Logger.Record("\t[StateMove]: Session Stage moving -> Environment", "SMWidget", "info");
                     break;
                 case Session.SessionStartingStage.Versions:
                     NoteType.Text = "Versions:";
+                    // Set default versions from previous session
+                    string defaultVersions = GetPreviousSessionValue("Versions");
+                    NoteContent.Text = defaultVersions;
                     Logger.Record("\t[StateMove]: Session Stage moving -> Versions", "SMWidget", "info");
                     break;
                 case Session.SessionStartingStage.Notes:
@@ -807,6 +833,154 @@ namespace Rapid_Reporter.Forms
             RTFNoteBtn.BitmapEffect = effect;
         }
 
+        // Get a field value from the most recent session's CSV file
+        private string GetPreviousSessionValue(string fieldName)
+        {
+            Logger.Record($"[GetPreviousSessionValue]: Looking for previous {fieldName}", "SMWidget", "info");
+            try
+            {
+                var currentDir = System.IO.Directory.GetCurrentDirectory();
+                var directories = System.IO.Directory.GetDirectories(currentDir);
+                
+                string latestCsvFile = null;
+                DateTime latestDate = DateTime.MinValue;
+
+                // Find the most recent session directory
+                foreach (var dir in directories)
+                {
+                    var dirName = System.IO.Path.GetFileName(dir);
+                    // Expected format: "yyyyMMdd_HHmmss - ScenarioName"
+                    if (dirName.Contains(" - "))
+                    {
+                        var parts = dirName.Split(new[] { " - " }, 2, StringSplitOptions.None);
+                        if (parts.Length == 2)
+                        {
+                            // Try to parse the timestamp
+                            if (DateTime.TryParseExact(parts[0], "yyyyMMdd_HHmmss", 
+                                CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime dirDate))
+                            {
+                                if (dirDate > latestDate)
+                                {
+                                    latestDate = dirDate;
+                                    // Look for CSV file in this directory
+                                    var csvFiles = System.IO.Directory.GetFiles(dir, "*.csv");
+                                    if (csvFiles.Length > 0)
+                                    {
+                                        latestCsvFile = csvFiles[0];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(latestCsvFile))
+                {
+                    Logger.Record($"[GetPreviousSessionValue]: No previous CSV file found for {fieldName}", "SMWidget", "info");
+                    return "";
+                }
+
+                // Read the CSV file and find the field value
+                foreach (var line in System.IO.File.ReadAllLines(latestCsvFile, Encoding.UTF8))
+                {
+                    if (string.IsNullOrWhiteSpace(line)) continue;
+                    var columns = line.Split(',');
+                    if (columns.Length >= 3 && columns[1] == fieldName)
+                    {
+                        var value = columns[2].Replace("\"", "").Trim();
+                        Logger.Record($"[GetPreviousSessionValue]: Found {fieldName}: {value}", "SMWidget", "info");
+                        return value;
+                    }
+                }
+
+                Logger.Record($"[GetPreviousSessionValue]: {fieldName} not found in CSV", "SMWidget", "info");
+                return "";
+            }
+            catch (Exception ex)
+            {
+                Logger.Record($"[GetPreviousSessionValue]: Error: {ex.Message}", "SMWidget", "error");
+                return "";
+            }
+        }
+
+        // Find the most recent scenario and increment its last number
+        private string GetIncrementedScenarioName()
+        {
+            Logger.Record("[GetIncrementedScenarioName]: Looking for previous scenarios", "SMWidget", "info");
+            try
+            {
+                var currentDir = System.IO.Directory.GetCurrentDirectory();
+                var directories = System.IO.Directory.GetDirectories(currentDir);
+                
+                string lastScenarioName = null;
+                DateTime latestDate = DateTime.MinValue;
+
+                // Find the most recent scenario directory
+                foreach (var dir in directories)
+                {
+                    var dirName = System.IO.Path.GetFileName(dir);
+                    // Expected format: "yyyyMMdd_HHmmss - ScenarioName"
+                    if (dirName.Contains(" - "))
+                    {
+                        var parts = dirName.Split(new[] { " - " }, 2, StringSplitOptions.None);
+                        if (parts.Length == 2)
+                        {
+                            // Try to parse the timestamp
+                            if (DateTime.TryParseExact(parts[0], "yyyyMMdd_HHmmss", 
+                                CultureInfo.InvariantCulture, DateTimeStyles.None, out DateTime dirDate))
+                            {
+                                if (dirDate > latestDate)
+                                {
+                                    latestDate = dirDate;
+                                    lastScenarioName = parts[1];
+                                }
+                            }
+                        }
+                    }
+                }
+
+                if (string.IsNullOrWhiteSpace(lastScenarioName))
+                {
+                    Logger.Record("[GetIncrementedScenarioName]: No previous scenario found", "SMWidget", "info");
+                    return "";
+                }
+
+                Logger.Record($"[GetIncrementedScenarioName]: Found previous scenario: {lastScenarioName}", "SMWidget", "info");
+
+                // Find the last number in the scenario name and increment it
+                var match = System.Text.RegularExpressions.Regex.Match(lastScenarioName, @"\d+");
+                if (match.Success)
+                {
+                    // Find the last occurrence of a number
+                    var matches = System.Text.RegularExpressions.Regex.Matches(lastScenarioName, @"\d+");
+                    if (matches.Count > 0)
+                    {
+                        var lastMatch = matches[matches.Count - 1];
+                        if (int.TryParse(lastMatch.Value, out int lastNumber))
+                        {
+                            int newNumber = lastNumber + 1;
+                            // Replace the last number with the incremented value, preserving leading zeros
+                            string newNumberStr = newNumber.ToString().PadLeft(lastMatch.Value.Length, '0');
+                            string newScenario = lastScenarioName.Substring(0, lastMatch.Index) + 
+                                                newNumberStr + 
+                                                lastScenarioName.Substring(lastMatch.Index + lastMatch.Length);
+                            Logger.Record($"[GetIncrementedScenarioName]: Incremented to: {newScenario}", "SMWidget", "info");
+                            return newScenario;
+                        }
+                    }
+                }
+
+                // If no number found, return the last scenario name as is
+                Logger.Record($"[GetIncrementedScenarioName]: No number found, returning: {lastScenarioName}", "SMWidget", "info");
+                return lastScenarioName;
+            }
+            catch (Exception ex)
+            {
+                Logger.Record($"[GetIncrementedScenarioName]: Error: {ex.Message}", "SMWidget", "error");
+                return "";
+            }
+        }
+
         // Changes the working Directory for the session
         private void SetWorkingDir(string newPath)
         {
@@ -931,9 +1105,13 @@ namespace Rapid_Reporter.Forms
         private void ResumeSession_Click(object sender, RoutedEventArgs e)
         {
             ResetSession();
+            // Clear the default tester name when resuming
+            _currentSession.Tester = "";
             if (!_currentSession.ResumeSession()) return;
             StateMove(Session.SessionStartingStage.Notes, true);
             _currentSession.UpdateNotes("Note", "Resuming Session...");
+            // Clear the note content field so it doesn't show the default user name
+            NoteContent.Text = "";
             NoteContent.Focus();
         }
 
