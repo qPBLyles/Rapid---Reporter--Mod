@@ -102,7 +102,22 @@ namespace Rapid_Reporter
 
         // Session data:
         public string ScenarioId = "";     // Session objective. Configured in runtime.
-        public string Tester = "";      // Tester's name. Configured in runtime.
+        private string _tester = null;      // Backing field for Tester
+        public string Tester      // Tester's name. Configured in runtime. Lazy-loaded from Windows user info.
+        {
+            get
+            {
+                if (_tester == null)
+                {
+                    _tester = GetWindowsUserFullName();
+                }
+                return _tester;
+            }
+            set
+            {
+                _tester = value;
+            }
+        }
         public string Charter = "";      // Configured in runtime.
         public string Environment = "";      // Configured in runtime.
         public string Versions = "";      // Configured in runtime.
@@ -135,8 +150,8 @@ namespace Rapid_Reporter
             // Real folder creation will happen in StartSession() when ScenarioId is available
             WorkingDir = Directory.GetCurrentDirectory() + @"\";
             
-            // Default Tester name to Windows user's full name
-            Tester = GetWindowsUserFullName();
+            // Default Tester name will be lazy-loaded when first accessed
+            // This avoids slow WMI queries during application startup
         }
         
         private static string GetWindowsUserFullName()
